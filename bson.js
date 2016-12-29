@@ -78,6 +78,8 @@ var BSON = {
       //double
       return 1 + 8;
     }
+    if (type == "boolean")
+      return 1;
     if (type == "string") {
       return 1 + BSON.getBytes(object.length) + object.length;
     }
@@ -125,7 +127,6 @@ var BSON = {
       }
       if (object <= 4294967295 && object >= -2147483648 && object == Math.floor(object)) {
         if (0 < object) {
-          console.log(object);
           if (object <= 255) {
             array.writeUint8(5);
             array.writeUint8(object);
@@ -170,6 +171,8 @@ var BSON = {
       array.writeUint8(12);
       throw new Error("Number too large!");
     }
+    if (type == "boolean")
+      return array.writeUint8(object ? 3 : 4);
     if (type == "string") {
       array.writeUint8(16);
       BSON.fillArray(object.length, array);
@@ -214,6 +217,10 @@ var BSON = {
       return null;
     case 2:
       return undefined;
+    case 3:
+        return true;
+    case 4:
+        return false;
     case 5:
       return array.getUint8();
     case 6:
