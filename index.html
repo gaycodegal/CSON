@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+
+<body>
+  <script src="stack.js"></script>
+  <script src="cson.js"></script>
+  <script>
+    var nodes = ["a", "b", "c", "d", "e"], sa = null;
+
+    for (var i = 0; i < nodes.length; ++i) {
+      window[nodes[i]] = {};
+    }
+    for (var i = 0; i < nodes.length; ++i) {
+         window[nodes[i]].next = window[nodes[(i + 1)%nodes.length]];
+         window[nodes[i]].prev = window[nodes[(i + nodes.length - 1)%nodes.length]];
+    }
+    console.log("Stringify:");
+    console.log(CSON.stringify(a));
+    console.log("Converting Back");
+    console.log(sa = CSON.parse(CSON.stringify(a)));
+    console.log("Success!", a != b);
+  </script>
+</body>
+
+</html>

@@ -1,0 +1,967 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>JSDoc: Source: cson.js</title>
+
+    <script src="scripts/prettify/prettify.js"> </script>
+    <script src="scripts/prettify/lang-css.js"> </script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <link type="text/css" rel="stylesheet" href="styles/prettify-tomorrow.css">
+    <link type="text/css" rel="stylesheet" href="styles/jsdoc-default.css">
+</head>
+
+<body>
+
+<div id="main">
+
+    <h1 class="page-title">Source: cson.js</h1>
+
+    
+
+
+
+    
+    <section>
+        <article>
+            <pre class="prettyprint source linenums"><code>/**
+@namespace CSON
+*/
+var CSON = {
+  /**
+  WARNING: NOT THE THING YOU PROBABLY WANT
+  Parses a CSON.CharArray into a javascript object.
+  @return {any} some javascript object, number, string, array, ect.
+  */
+  parse_array: function (array) {
+    var context = CSON.readArray(array);
+    context = {
+      o: 0,
+      c: context
+    };
+    CSON.readArray(array, context);
+    return context.c[1];
+  },
+  /**
+  WARNING: NOT THE THING YOU PROBABLY WANT
+  Turns a javascript object into a CSON.CharArray.
+  @return {CSON.CharArray} the binary data in a CharArray
+  */
+  stringify_array: function (object) {
+    var context = CSON.decircularize(object);
+    context = context.data.slice(0, context.fill);
+    var array = new CSON.CharArray(CSON.getBytes(context, true));
+    CSON.fillArray(context, array, true);
+    CSON.recircularize(context);
+    array.rollBack();
+    return array;
+  },
+  /**
+  Turns a string into a javascript object.
+  @return {any} some javascript object, number, string, array, ect.
+  */
+  parse: function (string) {
+    var chr = new CSON.CharArray();
+    chr.initWithString(string);
+    var context = CSON.readArray(chr);
+    context = {
+      o: 0,
+      c: context
+    };
+    chr.rollBack();
+    CSON.readArray(chr, context);
+    return context.c[1];
+  },
+  /**
+  Turns a javascript object into a string.
+  @return {String} the binary data in a String
+  */
+  stringify: function (object) {
+    return CSON.stringify_array(object).toString();
+  },
+  /**
+  the maximum a float should be able to represent with 32 bits.
+  */
+  floatMAX: (2 - Math.pow(2, -23)) * Math.pow(2, 127),
+  /**
+  Allows an object to be decircularize
+  @param o {Object} The data to decircularize
+  @param context {null} Used in recursion. Don't touch.
+  @return {CSON.GrowArray} The context (used internally)
+  */
+  decircularize: function (o, context) {
+    if (!context) {
+      context = {
+        next_id: 1,
+        s: new CSON.GrowArray()
+      };
+      context.s.push(null); // NULL
+    }
+    if (typeof o === "object" &amp;&amp; !o.__circ_id) {
+      o.__circ_id = context.next_id++;
+      context.s.push(o);
+      for (var i in o) {
+        CSON.decircularize(o[i], context);
+      }
+    }
+    return context.s;
+  },
+  /**
+  Allows an object to be circularized again
+  */
+  recircularize: function (context) {
+    for (var i = 1; i &lt; context.length; ++i) {
+      var o = context[i];
+      o.__circ_id = null;
+      delete(o.__circ_id);
+    }
+  },
+
+  /**
+  get the number of bytes necessary to store the object.
+  */
+  getBytes: function (object, isContext) {
+    if (object === null)
+      return 1;
+    if (object === undefined)
+      return 1;
+    if (object.valueOf)
+      object = object.valueOf();
+    var type = typeof object;
+    if (type == "number") { //int
+      if (!isFinite(object)) //isNaN + Infinities
+        return 1 + 4; // float NaN
+      if (object &lt;= 4294967295 &amp;&amp; object >= -2147483648 &amp;&amp; object == (object | 0)) {
+        if (0 &lt; object) {
+          if (object &lt;= 255)
+            return 1 /*type*/ + 1 /*data*/
+          if (object &lt;= 65535)
+            return 1 /*type*/ + 2 /*data*/
+          if (object &lt;= 4294967295)
+            return 1 /*type*/ + 4 /*data*/
+          return 1 /*type*/ + 8 /*data*/
+        } else {
+          if (-128 &lt;= object &amp;&amp; object &lt;= 127)
+            return 1 /*type*/ + 1 /*data*/
+          if (-32768 &lt;= object &amp;&amp; object &lt;= 32767)
+            return 1 /*type*/ + 2 /*data*/
+          if (-2147483648 &lt;= object &amp;&amp; object &lt;= 2147483647)
+            return 1 /*type*/ + 4 /*data*/
+          return 1 /*type*/ + 8 /*data*/
+        }
+      }
+      if (-CSON.floatMAX &lt;= object &amp;&amp; object &lt;= CSON.floatMAX) {
+        return 1 + 4;
+      }
+      //double
+      return 1 + 8;
+    }
+    if (type == "boolean")
+      return 1;
+    if (type == "string") {
+      return 1 + CSON.getBytes(object.length) + object.length;
+    }
+    if (type == "function")
+      return 0;
+    if (object instanceof Array) {
+      var sum = 1 + CSON.getBytes(object.length);
+      for (var i = 0; i &lt; object.length; ++i) {
+        if (!isContext &amp;&amp; val instanceof Object) {
+          sum += 5;
+        } else {
+          sum += CSON.getBytes(object[i]);
+        }
+      }
+      return sum;
+    }
+    var keys = Object.keys(object),
+      bad = 0;
+    for (var i = 0; i &lt; keys.length; ++i) {
+      var prop = keys[i];
+      if (object[prop] instanceof Function || prop == "__circ_id") {
+        ++bad;
+        keys[i] = null;
+      }
+    }
+    var sum = 1 + CSON.getBytes(keys.length - bad);
+    for (var i = 0; i &lt; keys.length; ++i) {
+      var prop = keys[i];
+      if (prop !== null) {
+        var val = object[prop];
+        if (val instanceof Object) {
+          sum += CSON.getBytes(prop) + 5;
+        } else {
+          sum += CSON.getBytes(prop) + CSON.getBytes(val);
+        }
+      }
+    }
+    return sum;
+  },
+  /**
+  fill a given CharArray with the binary representation of an object.
+  */
+  fillArray: function (object, array, isContext) {
+    if (object === null)
+      return array.writeUint8(1);
+    if (object === undefined)
+      return array.writeUint8(2);
+    if (object.valueOf)
+      object = object.valueOf();
+    var type = typeof object;
+    if (type == "number") { //int
+
+      if (!isFinite(object)) { //isNaN + Infinities
+        array.writeUint8(11);
+        array.writeFloat(object);
+        return;
+      }
+      if (object &lt;= 4294967295 &amp;&amp; object >= -2147483648 &amp;&amp; object == Math.floor(object)) {
+        if (0 &lt; object) {
+          if (object &lt;= 255) {
+            array.writeUint8(5);
+            array.writeUint8(object);
+            return;
+          }
+          if (object &lt;= 65535) {
+            array.writeUint8(6);
+            array.writeUint16(object);
+            return;
+          }
+          if (object &lt;= 4294967295) {
+            array.writeUint8(7);
+            array.writeUint32(object);
+            return;
+          }
+          throw new Error("Number too large!");
+        } else {
+          if (-128 &lt;= object &amp;&amp; object &lt;= 127) {
+            array.writeUint8(8);
+            array.writeInt8(object);
+            return;
+          }
+          if (-32768 &lt;= object &amp;&amp; object &lt;= 32767) {
+            array.writeUint8(9);
+            array.writeInt16(object);
+            return;
+          }
+          if (-2147483648 &lt;= object &amp;&amp; object &lt;= 2147483647) {
+            array.writeUint8(10);
+            array.writeInt32(object);
+            return;
+          }
+          throw new Error("Number too large!");
+        }
+      }
+      if (-CSON.floatMAX &lt; object &amp;&amp; object &lt; CSON.floatMAX) {
+        array.writeUint8(11);
+        array.writeFloat(object);
+        return;
+      }
+      //double
+      array.writeUint8(12);
+      throw new Error("Number too large!");
+    }
+    if (type == "boolean")
+      return array.writeUint8(object ? 3 : 4);
+    if (type == "string") {
+      array.writeUint8(16);
+      CSON.fillArray(object.length, array);
+      array.writeString(object);
+      return;
+    }
+    if (type == "function")
+      return 0;
+    if (object instanceof Array) {
+      array.writeUint8(18);
+      CSON.fillArray(object.length, array);
+      for (var i = 0; i &lt; object.length; ++i) {
+        var val = object[i];
+        if (!isContext &amp;&amp; val instanceof Object) {
+          array.writeUint8(33); // 32bitPointer
+          array.writeUint32(val.__circ_id);
+        } else {
+          CSON.fillArray(val, array);
+        }
+      }
+      return;
+    }
+    var keys = Object.keys(object),
+      bad = 0;
+    for (var i = 0; i &lt; keys.length; ++i) {
+      var prop = keys[i];
+      if (object[prop] instanceof Function || prop == "__circ_id") {
+        ++bad;
+        keys[i] = null;
+      }
+    }
+    array.writeUint8(32);
+    CSON.fillArray(keys.length - bad, array);
+    for (var i = 0; i &lt; keys.length; ++i) {
+      var prop = keys[i];
+      if (prop !== null) {
+        var val = object[prop];
+        if (val instanceof Object) {
+          CSON.fillArray(prop, array);
+          array.writeUint8(33); // 32bitPointer
+          array.writeUint32(val.__circ_id);
+        } else {
+          CSON.fillArray(prop, array);
+          CSON.fillArray(val, array);
+        }
+      }
+    }
+    return;
+  },
+  /**
+  reads a binary CharArray and returns the generated object
+  */
+  readArray: function (array, context) {
+    var type = array.getUint8();
+    switch (type) {
+    case 1:
+      return null;
+    case 2:
+      return undefined;
+    case 3:
+      return true;
+    case 4:
+      return false;
+    case 5:
+      return array.getUint8();
+    case 6:
+      return array.getUint16();
+    case 7:
+      return array.getUint32();
+    case 8:
+      return array.getInt8();
+    case 9:
+      return array.getInt16();
+    case 10:
+      return array.getInt32();
+    case 11:
+      return array.getFloat();
+    case 12:
+      break;
+    case 16:
+      var len = CSON.readArray(array);
+      return array.getString(len);
+    case 18:
+      var len = CSON.readArray(array);
+      var ary;
+      if (context &amp;&amp; context.o) {
+        ary = context.c[context.o++];
+      } else {
+        if (context) {
+          ++context.o;
+        }
+        ary = new Array(len);
+      }
+      for (var i = 0; i &lt; len; ++i) {
+        ary[i] = CSON.readArray(array, context);
+      }
+      return ary;
+    case 32:
+      var len = CSON.readArray(array);
+      var obj = {};
+      if (context &amp;&amp; context.o) {
+        obj = context.c[context.o++];
+      }
+      while (len--) {
+        var key = CSON.readArray(array);
+        obj[key] = CSON.readArray(array, context);
+      }
+      return obj;
+    case 33:
+      if (!context)
+        return array.getUint32();
+      var obj = context.c[array.getUint32()];
+      return obj;
+    }
+  }
+};
+
+  /**
+creates a buffer to write data into or read out of.
+does the main work behind converting things into binary or back
+@constructor
+@this {CSON.CharArray}
+@param {int?} size The number of bytes this can hold. 
+If not provided, you have to use the init methods.
+*/
+  function CharArray(size) {
+    this.length = size || 0;
+    this.readHead = 0;
+    this.buffer = (size &amp;&amp; new CharArray.Array(size)) || null;
+  }
+
+  /**
+  The type of array used to store bits. 
+  */
+  CharArray.Array = Uint8Array || Array;
+
+  /**
+  Init the array with a binary string.
+  */
+  CharArray.prototype.initWithString = function (string) {
+    this.readHead = 0;
+    this.length = string.length;
+    this.buffer = string.split("");
+    for (var i = 0; i &lt; this.length; i++) {
+      this.buffer[i] = this.buffer[i].charCodeAt(0);
+    }
+    return this;
+  };
+
+  /**
+  Init the readHead, length, and buffer
+  */
+  CharArray.prototype.initWithRLB = function (readHead, length, buffer) {
+    this.readHead = readHead;
+    this.length = length;
+    this.buffer = buffer;
+    return this;
+  };
+
+  /**
+  Access the Uint8Array
+  */
+  CharArray.prototype.getBuffer = function () {
+    return this.buffer;
+  };
+
+  /**
+  Get a string from the Array.
+  if you provide a length, that will
+  be the length of the string.
+  otherwise, it will assume null termination.
+  */
+  CharArray.prototype.getString = function (len) {
+    var start = this.readHead;
+    if (len === undefined) {
+      while (this.buffer[this.readHead++] != '\0'.charCodeAt(0));
+      len = this.readHead - start;
+    } else {
+      this.readHead += len;
+      ++len;
+    }
+    var array = new Array(--len);
+    while (len--) {
+      array[len] = String.fromCharCode(this.buffer[len + start]);
+    }
+    return array.join("");
+  };
+
+  /**
+  Converts into a string, where the characters 
+  of the string are the direct bits of the buffer.
+  */
+  CharArray.prototype.toString = function () {
+    var index = this.length;
+    var array = new Array(index);
+    while (index--) {
+      array[index] = String.fromCharCode(this.buffer[index]);
+    }
+    return array.join("");
+  };
+
+  /**
+  resets the readHead to zero, so that the array
+  can be read again.
+  */
+  CharArray.prototype.rollBack = function () {
+    this.readHead = 0;
+    return this;
+  };
+
+  /**
+  brings the readhead back by the specified amount.
+  Generally used for reading things twice.
+  */
+  CharArray.prototype.rollBackBy = function (amount) {
+    this.readHead -= amount;
+    return this;
+  };
+
+  /**
+  Get a float from the buffer.
+  */
+  CharArray.prototype.getFloat = function () {
+    return binToFloat(this.getInt32());
+  };
+
+  /**
+  Get a signed int32 from the array
+  */
+  CharArray.prototype.getInt32 = function () {
+    var ret = ((this.buffer[this.readHead] &lt;&lt; 24) |
+      (this.buffer[this.readHead + 1] &lt;&lt; 16) |
+      (this.buffer[this.readHead + 2] &lt;&lt; 8) |
+      (this.buffer[this.readHead + 3])) | 0;
+    this.readHead += 4;
+    return ret;
+  };
+
+  /**
+  Get an unsigned int32 from the array
+  */
+  CharArray.prototype.getUint32 = function () {
+    var ret = ((this.buffer[this.readHead] &lt;&lt; 24) |
+      (this.buffer[this.readHead + 1] &lt;&lt; 16) |
+      (this.buffer[this.readHead + 2] &lt;&lt; 8) |
+      (this.buffer[this.readHead + 3])) | 0;
+    this.readHead += 4;
+    if (ret &lt; 0)
+      return -ret + 0x80000000;
+    return ret;
+  };
+
+  /**
+  Get an unsigned int16 from the array
+  */
+  CharArray.prototype.getUint16 = function () {
+    var ret = (this.buffer[this.readHead] &lt;&lt; 8) |
+      (this.buffer[this.readHead + 1]);
+    this.readHead += 2;
+    return ret;
+  };
+
+  /**
+  Get a signed int16 from the array
+  */
+  CharArray.prototype.getInt16 = function () {
+    var ret = (this.buffer[this.readHead] &lt;&lt; 8) |
+      (this.buffer[this.readHead + 1]);
+    this.readHead += 2;
+    if (ret &amp; 0x8000)
+      return 0xFFFF0000 | ret;
+    return ret;
+  };
+
+  /**
+  Get an unsigned int16 from the array
+  */
+  CharArray.prototype.getUint8 = function () {
+    return this.buffer[this.readHead++];
+  };
+
+  /**
+  Get a signed int16 from the array
+  */
+  CharArray.prototype.getInt8 = function () {
+    var ret = this.buffer[this.readHead++];
+    if (ret &amp; 0x80)
+      return 0xFFFFFF00 | (ret);
+    return ret;
+  };
+
+  /**
+  Downloads the contents of the char array as binary
+  to a file of the specified name.
+  */
+  CharArray.prototype.download = function (filename) {
+
+
+    var element = document.createElement('a');
+
+
+
+    element.style.display = 'none';
+    document.body.appendChild(element);
+
+    var blob = new Blob([this.buffer], {
+        type: "octet/stream"
+      }),
+      url = window.URL.createObjectURL(blob);
+    element.href = url;
+    element.download = filename;
+    element.click();
+    window.URL.revokeObjectURL(url);
+
+
+
+    document.body.removeChild(element);
+  };
+
+  /**
+  Get a subsequence from the start to length. 
+  Works, but deprecated. Don't use yet.
+  @private
+  */
+  CharArray.prototype.getChars = function (length) {
+    var newBuffer = new CharArray.Array(length);
+    var i = 0;
+    while (i &lt; length) {
+      newBuffer[i++] = this.buffer[this.readHead++];
+    }
+    var array = new CharArray();
+    array.initWithRLB(0, length, newBuffer);
+    return array;
+  };
+
+  /**
+  Get an int of size x.
+  */
+  CharArray.prototype.getInt = function (x) {
+    switch (x) {
+    case 8:
+      return this.getInt8();
+      break;
+    case 16:
+      return this.getInt16();
+      break;
+    default:
+      return this.getInt32();
+      break;
+    }
+  };
+
+  /**
+  Returns a css color stored in ARGB format
+  @private
+  */
+  CharArray.prototype.getColor = function () {
+    var a = (this.get8bits() / 255);
+    return "rgba(" + this.get8bits() + "," + this.get8bits() + "," + this.get8bits() + "," + a + ")";
+  };
+
+  /**
+  Get the length of the buffer
+  */
+  CharArray.prototype.getLength = function () {
+    return this.length;
+  };
+
+  /**
+  overwrite a subarray of the buffer with the contents of another
+  CharArray.
+  */
+  CharArray.prototype.changeTo = function (array, start) {
+    var other = array.buffer;
+    var size = array.length;
+    for (var i = 0; i &lt; size; i++) {
+      this.buffer[i + start] = this.other[i];
+    }
+  };
+
+  /**
+  basically the same thing as changeTo. Will be deprecated soon.
+  @private
+  */
+  CharArray.prototype.writeArray = function (array) {
+    var other = array;
+    var size = array.length;
+    var start = this.readHead;
+    for (var i = 0; i &lt; size; i++) {
+      this.buffer[i + start] = this.other[i];
+    }
+    this.readHead += size;
+  };
+
+  /**
+  Write a Uint8 to the array
+  */
+  CharArray.prototype.writeUint8 = function (uint) {
+    this.buffer[this.readHead++] = uint &amp; 0xFF;
+  };
+
+  /**
+  Write a Uint16 to the array
+  */
+  CharArray.prototype.writeUint16 = function (uint) {
+    this.buffer[this.readHead++] = (uint >> 8) &amp; 0xFF;
+    this.buffer[this.readHead++] = uint &amp; 0xFF;
+  };
+
+  /**
+  Write a Uint32 to the array
+  */
+  CharArray.prototype.writeUint32 = function (uint) {
+    this.buffer[this.readHead++] = (uint >> 24) &amp; 0xFF;
+    this.buffer[this.readHead++] = (uint >> 16) &amp; 0xFF;
+    this.buffer[this.readHead++] = (uint >> 8) &amp; 0xFF;
+    this.buffer[this.readHead++] = uint &amp; 0xFF;
+  };
+
+  /**
+  Write a Float to the array
+  */
+  CharArray.prototype.writeFloat = function (n) {
+    this.writeUint32(floatToBin(n));
+  };
+
+  /**
+  write a signed int8 to the array
+  */
+  CharArray.prototype.writeInt8 = function (uint) {
+    this.buffer[this.readHead++] = uint &amp; 0x7F | (uint &lt; 0 ? 0x80 : 0);
+  };
+
+  /**
+  write a signed int16 to the array
+  */
+  CharArray.prototype.writeInt16 = function (uint) {
+    this.buffer[this.readHead++] = (uint >> 8) &amp; 0x7F | (uint &lt; 0 ? 0x80 : 0);
+    this.buffer[this.readHead++] = uint &amp; 0xFF;
+  };
+
+  /**
+  write a signed int32 to the array
+  */
+  CharArray.prototype.writeInt32 = function (uint) {
+    this.buffer[this.readHead++] = (uint >> 24) &amp; 0x7F | (uint &lt; 0 ? 0x80 : 0);
+    this.buffer[this.readHead++] = (uint >> 16) &amp; 0xFF;
+    this.buffer[this.readHead++] = (uint >> 8) &amp; 0xFF;
+    this.buffer[this.readHead++] = uint &amp; 0xFF;
+  };
+
+  /**
+  write a string to the array, not null terminated.
+  */
+  CharArray.prototype.writeString = function (string) {
+    var other = string;
+    var size = string.length;
+    var start = this.readHead;
+    for (var i = 0; i &lt; size; i++) {
+      this.buffer[i + start] = string.charCodeAt(i);
+    }
+    this.readHead += size;
+  };
+
+  /**
+  convert hex into ascii. Not sure if needed
+  @private
+  */
+  function hex2a(hexx, length) {
+    if (hexx &lt; 0) {
+      hexx = 0xFFFFFFFF + hexx + 1;
+    }
+    var hex = hexx.toString(16); //force conversion
+    length = length || (hex.length &lt;&lt; 2);
+    length >>= 2;
+    var str = '';
+    for (var i = 0; i &lt; hex.length &amp;&amp; i &lt; length; i += 2)
+      str += String.fromCharCode(parseInt(hex.substr(i, 2), 16));
+    while (i &lt; length) {
+      str = String.fromCharCode(0) + str;
+      i += 2;
+    }
+    return str;
+  }
+
+  /**
+  put the top u bits of an int n into a number i
+  @private
+  */
+  function shoveInt(i, u, n) {
+    u = 1 &lt;&lt; (u - 1);
+    var p = 0;
+    while (n) {
+      ++p;
+      i >>>= 1;
+      if (n &amp; 1) {
+        i |= u;
+      }
+      n = Math.floor(n / 2);
+    }
+    return [i, p];
+  }
+
+  /**
+  put the top u bits of a float n into a number i
+  @private
+  */
+  function shoveFrac(i, u, n) {
+    if (n == 0)
+      return [0, 0];
+    var t = u;
+    u = 0xFFFFFFFF >>> (32 - u);
+    var p = 0;
+    if (n &lt; 1)
+      ++p;
+    while (n &lt; 1) {
+      --p;
+      n *= 2;
+    }
+    while (t--) {
+      i = (i &lt;&lt; 1) &amp; u;
+      --p;
+      if (n >= 1) {
+        i |= 1;
+        --n;
+      }
+      n *= 2;
+
+    }
+    return [i, p];
+  }
+
+  /**
+  Converts a floating point number to its binary representation
+  @return {int} bits of the number.
+  @private
+  */
+  function floatToBin(n) {
+    var mantissa_size = 23;
+    //the sign bit of the float
+    var sign_bit = n &lt; 0 ? 0x80000000 : 0;
+    if (n == 0) {
+      if (1 / n == Infinity)
+        return 0;
+      //negative 0 - you wanted zero as a float? then you want this too.
+      return 0x80000000;
+    }
+    //we only want positives
+    n = Math.abs(n);
+    //NaN
+    if (n != n) {
+      return 0x7fc00000; //QNaN quiet
+    }
+    if (n == Infinity) {
+      if (sign_bit)
+        return 0xff800000; //negative inf
+      return 0x7f800000; //inf
+    }
+    var mantissa = 0;
+    var power;
+    var int_part = Math.floor(n);
+    var frac_part = n - int_part;
+    //get the frac as a bit sequence, highest mantissa_size + 2 with power
+    //the +2 is for A) the rounding bit and B) the leading 1
+    frac_part = shoveFrac(mantissa, mantissa_size + 2, frac_part);
+    //get the int part as a bit sequence + 2 with power (flawed power)
+    //the +2 is for A) the rounding bit and B) the leading 1
+    int_part = shoveInt(mantissa, mantissa_size + 2, int_part);
+    //how much we're going to have to shift the frac by when or-ing into the int
+    var shift_frac_by = (int_part[1] + (-frac_part[1] - (mantissa_size + 2)));
+    //power of the int (unflawed)
+    power = -((mantissa_size + 1) - int_part[1]);
+    //start the mantissa with the int, which is already left shifted properly
+    mantissa = int_part[0];
+    if (!mantissa) {
+      //special case. No int, we only have a frac
+      power = frac_part[1] + 1;
+      mantissa = (frac_part[0] >>> 1) + (frac_part[0] &amp; 1);
+    } else {
+      //regular case. int and possibly a frac
+      mantissa = (int_part[0] | (frac_part[0] >>> shift_frac_by));
+      mantissa = (mantissa >>> 1) + (mantissa &amp; 1);
+    }
+    //oddball case think 0xFF + 1 => 0x100, but with floats after the rounding bit
+    //has been added, and this makes it one power too large. It ends in a zero though
+    //guarenteed!
+    if (mantissa &amp; (1 &lt;&lt; (mantissa_size + 1))) { //0x1FFFFFFE/0xFFFFFFF to trigger
+      mantissa >>>= 1;
+      ++power;
+    }
+    //bound the mantissa into its propper size. 32 is num bits in a float
+    mantissa &amp;= (0xFFFFFFFF >>> (32 - mantissa_size));
+    //because apparently floating point is stored 1.xxxxx not just 1xxxxx
+    power += 23;
+    //if we're out of bounds
+    if (power &lt; -126 || power > 127) {
+      console.error("Power out of bounds. SNaN returned. Probably trouble for you!");
+      return 0x7f800001; //SNaN signal
+    }
+    //bias
+    power = power + 127;
+    return sign_bit | (power &lt;&lt; mantissa_size) | mantissa;
+  }
+
+  /*
+  Converts a binary number to floating point.
+  @private
+  */
+  function binToFloat(n) {
+    var s = n &amp; 0x80000000;
+    n ^= s;
+    if (n == 0)
+      return (s ? -0 : 0);
+    var e = (n >> 23);
+    n ^= (e &lt;&lt; 23);
+    if (e == 0xff) {
+      if (n == 0) {
+        return (s ? -Infinity : Infinity);
+      }
+      if (!(n &amp; (1 &lt;&lt; 22)))
+        console.error("SNaN read. Probably trouble for you!");
+      return NaN;
+    }
+
+    n |= (1 &lt;&lt; 23);
+    return (s ? -1 : 1) * n * Math.pow(2, e - 127 - 23);
+  }
+  CSON.CharArray = CharArray;
+  
+  /**
+  A simple grow array. Good for fast
+  data intake of uncertain size.
+  @param {int?} size The size the
+  internal array will start at.
+  @param {constructor?} array_type The type that
+  the internal array will have.
+  @property {int} size The current max
+  capacity of data.
+  @property {int} fill The current number
+  of things stored
+  @property {Array.&lt;Object>} data The
+  held objects.
+  @constructor
+  @this {CSON.GrowArray}
+  */
+  function GrowArray(size, array_type) {
+    array_type || (array_type = Array);
+    this.size = size || 32;
+    this.fill = 0;
+    this.data = new array_type(this.size);
+  }
+  
+  /**
+  add something to the end of the array
+  @param {Object} d What to add
+  */
+  GrowArray.prototype.push = function (d) {
+    if (this.fill == this.size)
+      this.grow(this.size &lt;&lt; 1);
+    this.data[this.fill++] = d;
+  };
+  
+  /**
+  get bigger
+  */
+  GrowArray.prototype.grow = function (newSize) {
+    var oldSize = this.fill,
+      oldData = this.data;
+    this.size = newSize;
+    this.data = new Array(this.size);
+    for (var i = 0; i &lt; oldSize; ++i) {
+      this.data[i] = oldData[i];
+    }
+    oldData = null;
+  };
+
+  CSON.GrowArray = GrowArray;
+</code></pre>
+        </article>
+    </section>
+
+
+
+
+</div>
+
+<nav>
+    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="CharArray.html">CharArray</a></li><li><a href="GrowArray.html">GrowArray</a></li></ul><h3>Namespaces</h3><ul><li><a href="CSON.html">CSON</a></li></ul>
+</nav>
+
+<br class="clear">
+
+<footer>
+    Documentation generated by <a href="https://github.com/jsdoc3/jsdoc">JSDoc 3.4.3</a> on Thu Jan 26 2017 22:53:26 GMT-0500 (EST)
+</footer>
+
+<script> prettyPrint(); </script>
+<script src="scripts/linenumber.js"> </script>
+</body>
+</html>

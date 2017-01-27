@@ -1,21 +1,32 @@
-var BSON = {
+/**
+@namespace CSON
+*/
+var CSON = {
   /**
   WARNING: NOT THE THING YOU PROBABLY WANT
-  Parses a BSON.CharArray into a javascript object.
+  Parses a CSON.CharArray into a javascript object.
   @return {any} some javascript object, number, string, array, ect.
   */
   parse_array: function (array) {
-    var obj = BSON.readArray(array);
-    return obj;
+    var context = CSON.readArray(array);
+    context = {
+      o: 0,
+      c: context
+    };
+    CSON.readArray(array, context);
+    return context.c[1];
   },
   /**
   WARNING: NOT THE THING YOU PROBABLY WANT
-  Turns a javascript object into a BSON.CharArray.
-  @return {BSON.CharArray} the binary data in a CharArray
+  Turns a javascript object into a CSON.CharArray.
+  @return {CSON.CharArray} the binary data in a CharArray
   */
   stringify_array: function (object) {
-    var array = new BSON.CharArray(this.getBytes(object));
-    this.fillArray(object, array);
+    var context = CSON.decircularize(object);
+    context = context.data.slice(0, context.fill);
+    var array = new CSON.CharArray(CSON.getBytes(context, true));
+    CSON.fillArray(context, array, true);
+    CSON.recircularize(context);
     array.rollBack();
     return array;
   },
@@ -24,25 +35,66 @@ var BSON = {
   @return {any} some javascript object, number, string, array, ect.
   */
   parse: function (string) {
-    var chr = new BSON.CharArray();
+    var chr = new CSON.CharArray();
     chr.initWithString(string);
-    return BSON.readArray(chr);
+    var context = CSON.readArray(chr);
+    context = {
+      o: 0,
+      c: context
+    };
+    chr.rollBack();
+    CSON.readArray(chr, context);
+    return context.c[1];
   },
   /**
   Turns a javascript object into a string.
   @return {String} the binary data in a String
   */
   stringify: function (object) {
-    return BSON.stringify_array(object).toString();
+    return CSON.stringify_array(object).toString();
   },
   /**
   the maximum a float should be able to represent with 32 bits.
   */
   floatMAX: (2 - Math.pow(2, -23)) * Math.pow(2, 127),
   /**
+  Allows an object to be decircularize
+  @param o {Object} The data to decircularize
+  @param context {null} Used in recursion. Don't touch.
+  @return {CSON.GrowArray} The context (used internally)
+  */
+  decircularize: function (o, context) {
+    if (!context) {
+      context = {
+        next_id: 1,
+        s: new CSON.GrowArray()
+      };
+      context.s.push(null); // NULL
+    }
+    if (typeof o === "object" && !o.__circ_id) {
+      o.__circ_id = context.next_id++;
+      context.s.push(o);
+      for (var i in o) {
+        CSON.decircularize(o[i], context);
+      }
+    }
+    return context.s;
+  },
+  /**
+  Allows an object to be circularized again
+  */
+  recircularize: function (context) {
+    for (var i = 1; i < context.length; ++i) {
+      var o = context[i];
+      o.__circ_id = null;
+      delete(o.__circ_id);
+    }
+  },
+
+  /**
   get the number of bytes necessary to store the object.
   */
-  getBytes: function (object) {
+  getBytes: function (object, isContext) {
     if (object === null)
       return 1;
     if (object === undefined)
@@ -72,7 +124,7 @@ var BSON = {
           return 1 /*type*/ + 8 /*data*/
         }
       }
-      if (-BSON.floatMAX <= object && object <= BSON.floatMAX) {
+      if (-CSON.floatMAX <= object && object <= CSON.floatMAX) {
         return 1 + 4;
       }
       //double
@@ -81,36 +133,48 @@ var BSON = {
     if (type == "boolean")
       return 1;
     if (type == "string") {
-      return 1 + BSON.getBytes(object.length) + object.length;
+      return 1 + CSON.getBytes(object.length) + object.length;
     }
     if (type == "function")
       return 0;
     if (object instanceof Array) {
-      var sum = 1 + BSON.getBytes(object.length);
+      var sum = 1 + CSON.getBytes(object.length);
       for (var i = 0; i < object.length; ++i) {
-        sum += BSON.getBytes(object[i]);
+        if (!isContext && val instanceof Object) {
+          sum += 5;
+        } else {
+          sum += CSON.getBytes(object[i]);
+        }
       }
       return sum;
     }
     var keys = Object.keys(object),
       bad = 0;
     for (var i = 0; i < keys.length; ++i) {
-      if (object[keys[i]] instanceof Function) {
+      var prop = keys[i];
+      if (object[prop] instanceof Function || prop == "__circ_id") {
         ++bad;
         keys[i] = null;
       }
     }
-    var sum = 1 + BSON.getBytes(keys.length - bad);
+    var sum = 1 + CSON.getBytes(keys.length - bad);
     for (var i = 0; i < keys.length; ++i) {
-      if (keys[i] !== null)
-        sum += BSON.getBytes(keys[i]) + BSON.getBytes(object[keys[i]]);
+      var prop = keys[i];
+      if (prop !== null) {
+        var val = object[prop];
+        if (val instanceof Object) {
+          sum += CSON.getBytes(prop) + 5;
+        } else {
+          sum += CSON.getBytes(prop) + CSON.getBytes(val);
+        }
+      }
     }
     return sum;
   },
   /**
   fill a given CharArray with the binary representation of an object.
   */
-  fillArray: function (object, array) {
+  fillArray: function (object, array, isContext) {
     if (object === null)
       return array.writeUint8(1);
     if (object === undefined)
@@ -162,7 +226,7 @@ var BSON = {
           throw new Error("Number too large!");
         }
       }
-      if (-BSON.floatMAX < object && object < BSON.floatMAX) {
+      if (-CSON.floatMAX < object && object < CSON.floatMAX) {
         array.writeUint8(11);
         array.writeFloat(object);
         return;
@@ -175,7 +239,7 @@ var BSON = {
       return array.writeUint8(object ? 3 : 4);
     if (type == "string") {
       array.writeUint8(16);
-      BSON.fillArray(object.length, array);
+      CSON.fillArray(object.length, array);
       array.writeString(object);
       return;
     }
@@ -183,26 +247,41 @@ var BSON = {
       return 0;
     if (object instanceof Array) {
       array.writeUint8(18);
-      BSON.fillArray(object.length, array);
+      CSON.fillArray(object.length, array);
       for (var i = 0; i < object.length; ++i) {
-        BSON.fillArray(object[i], array);
+        var val = object[i];
+        if (!isContext && val instanceof Object) {
+          array.writeUint8(33); // 32bitPointer
+          array.writeUint32(val.__circ_id);
+        } else {
+          CSON.fillArray(val, array);
+        }
       }
       return;
     }
     var keys = Object.keys(object),
       bad = 0;
     for (var i = 0; i < keys.length; ++i) {
-      if (object[keys[i]] instanceof Function) {
+      var prop = keys[i];
+      if (object[prop] instanceof Function || prop == "__circ_id") {
         ++bad;
         keys[i] = null;
       }
     }
     array.writeUint8(32);
-    BSON.fillArray(keys.length - bad, array);
+    CSON.fillArray(keys.length - bad, array);
     for (var i = 0; i < keys.length; ++i) {
-      if (keys[i] !== null) {
-        BSON.fillArray(keys[i], array);
-        BSON.fillArray(object[keys[i]], array);
+      var prop = keys[i];
+      if (prop !== null) {
+        var val = object[prop];
+        if (val instanceof Object) {
+          CSON.fillArray(prop, array);
+          array.writeUint8(33); // 32bitPointer
+          array.writeUint32(val.__circ_id);
+        } else {
+          CSON.fillArray(prop, array);
+          CSON.fillArray(val, array);
+        }
       }
     }
     return;
@@ -210,7 +289,7 @@ var BSON = {
   /**
   reads a binary CharArray and returns the generated object
   */
-  readArray: function (array) {
+  readArray: function (array, context) {
     var type = array.getUint8();
     switch (type) {
     case 1:
@@ -218,9 +297,9 @@ var BSON = {
     case 2:
       return undefined;
     case 3:
-        return true;
+      return true;
     case 4:
-        return false;
+      return false;
     case 5:
       return array.getUint8();
     case 6:
@@ -238,25 +317,40 @@ var BSON = {
     case 12:
       break;
     case 16:
-      var len = BSON.readArray(array);
+      var len = CSON.readArray(array);
       return array.getString(len);
     case 18:
-      var len = BSON.readArray(array);
-      var ary = new Array(len);
+      var len = CSON.readArray(array);
+      var ary;
+      if (context && context.o) {
+        ary = context.c[context.o++];
+      } else {
+        if (context) {
+          ++context.o;
+        }
+        ary = new Array(len);
+      }
       for (var i = 0; i < len; ++i) {
-        ary[i] = BSON.readArray(array);
+        ary[i] = CSON.readArray(array, context);
       }
       return ary;
     case 32:
-      var len = BSON.readArray(array);
+      var len = CSON.readArray(array);
       var obj = {};
+      if (context && context.o) {
+        obj = context.c[context.o++];
+      }
       while (len--) {
-        var key = BSON.readArray(array);
-        obj[key] = BSON.readArray(array);
+        var key = CSON.readArray(array);
+        obj[key] = CSON.readArray(array, context);
       }
       return obj;
-
-    };
+    case 33:
+      if (!context)
+        return array.getUint32();
+      var obj = context.c[array.getUint32()];
+      return obj;
+    }
   }
 };
 
@@ -265,7 +359,7 @@ var BSON = {
 creates a buffer to write data into or read out of.
 does the main work behind converting things into binary or back
 @constructor
-@this {CharArray}
+@this {CSON.CharArray}
 @param {int?} size The number of bytes this can hold. 
 If not provided, you have to use the init methods.
 */
@@ -771,5 +865,54 @@ If not provided, you have to use the init methods.
     n |= (1 << 23);
     return (s ? -1 : 1) * n * Math.pow(2, e - 127 - 23);
   }
-  BSON.CharArray = CharArray;
+  CSON.CharArray = CharArray;
+  
+  /**
+  A simple grow array. Good for fast
+  data intake of uncertain size.
+  @param {int?} size The size the
+  internal array will start at.
+  @param {constructor?} array_type The type that
+  the internal array will have.
+  @property {int} size The current max
+  capacity of data.
+  @property {int} fill The current number
+  of things stored
+  @property {Array.<Object>} data The
+  held objects.
+  @constructor
+  @this {CSON.GrowArray}
+  */
+  function GrowArray(size, array_type) {
+    array_type || (array_type = Array);
+    this.size = size || 32;
+    this.fill = 0;
+    this.data = new array_type(this.size);
+  }
+  
+  /**
+  add something to the end of the array
+  @param {Object} d What to add
+  */
+  GrowArray.prototype.push = function (d) {
+    if (this.fill == this.size)
+      this.grow(this.size << 1);
+    this.data[this.fill++] = d;
+  };
+  
+  /**
+  get bigger
+  */
+  GrowArray.prototype.grow = function (newSize) {
+    var oldSize = this.fill,
+      oldData = this.data;
+    this.size = newSize;
+    this.data = new Array(this.size);
+    for (var i = 0; i < oldSize; ++i) {
+      this.data[i] = oldData[i];
+    }
+    oldData = null;
+  };
+
+  CSON.GrowArray = GrowArray;
 })();
